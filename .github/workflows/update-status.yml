@@ -1,0 +1,65 @@
+# 達成状態の更新。
+#  - 毎時: リポジトリの Secret STATUS_SOURCE_URL が設定されていれば、そこから達成状態を取り込む
+#    （未設定なら何もしない）。
+#  - 手動実行: 都道府県（コードまたは名前）と 達成/未達成 を指定して 1 件だけ更新する。
+# 変更があったときだけ data.json をコミットし、GitHub Pages が再配信する。
+name: update-status
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      prefecture:
+        description: "都道府県（コード例: 13 / 名前例: 東京都）"
+        required: false
+        type: string
+      done:
+        description: "達成状態"
+        required: false
+        type: choice
+        default: "true"
+        options: ["true", "false"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-status
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Apply manual update
+        if: github.event_name == 'workflow_dispatch' && inputs.prefecture != ''
+        run: node scripts/update-status.mjs --set "${{ inputs.prefecture }}=${{ inputs.done }}"
+
+      - name: Pull status from source
+        if: github.event_name == 'schedule'
+        env:
+          STATUS_SOURCE_URL: ${{ secrets.STATUS_SOURCE_URL }}
+        run: |
+          if [ -z "$STATUS_SOURCE_URL" ]; then
+            echo "STATUS_SOURCE_URL is not set; nothing to do."
+            exit 0
+          fi
+          node scripts/update-status.mjs --from-url "$STATUS_SOURCE_URL"
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- data.json; then
+            echo "No change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          git commit -m "Update status"
+          git push
